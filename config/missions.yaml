@@ -1,0 +1,24 @@
+missions:
+  row:
+    x1: 359
+    y1: 365
+    x2: 638
+    y2: 415
+    width: 279
+    height: 50
+  slots:
+    slot_1:
+      x1: 0
+      x2: 56
+    slot_2:
+      x1: 56
+      x2: 112
+    slot_3:
+      x1: 112
+      x2: 167
+    slot_4:
+      x1: 167
+      x2: 223
+    slot_5:
+      x1: 223
+      x2: 279
