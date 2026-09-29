@@ -7,7 +7,7 @@ def main():
     frame = capture.grab()
 
     template = cv2.imread(
-        "assets/templates/NVHN.png",
+        "assets/templates/buttons/NVHN/001.png",
         cv2.IMREAD_COLOR
     )
 

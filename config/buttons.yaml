@@ -1,0 +1,78 @@
+buttons:
+  Select:
+    x1: 615
+    y1: 498
+    x2: 687
+    y2: 522
+    width: 72
+    height: 24
+  Explorer:
+    x1: 536
+    y1: 467
+    x2: 586
+    y2: 486
+    width: 50
+    height: 19
+  Training:
+    x1: 538
+    y1: 466
+    x2: 600
+    y2: 486
+    width: 62
+    height: 20
+  Arena:
+    x1: 535
+    y1: 467
+    x2: 615
+    y2: 486
+    width: 80
+    height: 19
+  Sail:
+    x1: 535
+    y1: 467
+    x2: 582
+    y2: 487
+    width: 47
+    height: 20
+  Cook:
+    x1: 537
+    y1: 468
+    x2: 586
+    y2: 486
+    width: 49
+    height: 18
+  Forge:
+    x1: 537
+    y1: 469
+    x2: 588
+    y2: 486
+    width: 51
+    height: 17
+  Gold:
+    x1: 21
+    y1: 257
+    x2: 65
+    y2: 274
+    width: 44
+    height: 17
+  Enhance:
+    x1: 538
+    y1: 468
+    x2: 587
+    y2: 485
+    width: 49
+    height: 17
+  Fight:
+    x1: 612
+    y1: 462
+    x2: 688
+    y2: 491
+    width: 76
+    height: 29
+  NVHN:
+    x1: 634
+    y1: 14
+    x2: 693
+    y2: 72
+    width: 59
+    height: 58
