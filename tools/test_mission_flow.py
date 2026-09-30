@@ -7,8 +7,9 @@ import win32con
 import win32gui
 import yaml
 
-from vision.detector import GameDetector
 from vision.window_capture import WindowCapture
+from vision.detector import GameDetector
+from vision.template import TemplateMatcher
 
 
 # ============================================================
@@ -29,41 +30,69 @@ REFRESH_TEMPLATE = Path(
     "assets/templates/refresh.png"
 )
 
-NVHN_TEMPLATE_DIR = Path(
-    "assets/templates/buttons/NVHN"
+NVHN_TEMPLATE = Path(
+    "assets/templates/buttons/NVHN/001.png"
 )
 
-DEBUG_CAPTURE_DIR = Path(
-    "debug/captures"
+DEBUG_DIR = Path(
+    "debug/multi_mission_flow"
 )
+
+THRESHOLD = 0.80
+
+# ------------------------------------------------------------
+# IMPORTANT:
+# Maximum refresh PER GAME WINDOW
+# ------------------------------------------------------------
 
 MAX_REFRESH = 1
 
-# Chờ sau mỗi lần gửi click
-CLICK_WAIT = 5.0
+# ------------------------------------------------------------
+# Click waits
+# ------------------------------------------------------------
 
-# Chờ sau khi mở NVHN
-WAIT_AFTER_NVHN = 3.0
+CLICK_WAIT = 3.0
 
-# Chờ sau khi refresh
-WAIT_AFTER_REFRESH = 3.0
-
-# Chờ sau Select
-WAIT_AFTER_SELECT = 3.0
-
-# Chờ sau khi đi tới destination
-WAIT_AFTER_DESTINATION = 8.0
+WAIT_AFTER_NVHN = 5.0
 
 
 # ============================================================
-# GAME WINDOW
+# YAML
 # ============================================================
 
-def find_game_window():
+def load_yaml(path):
+    path = Path(path)
 
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Config not found: {path}"
+        )
+
+    with open(
+        path,
+        "r",
+        encoding="utf-8"
+    ) as f:
+        return yaml.safe_load(f)
+
+
+BUTTON_CONFIG = load_yaml(
+    BUTTON_CONFIG_PATH
+)
+
+REFRESH_CONFIG = load_yaml(
+    REFRESH_CONFIG_PATH
+)
+
+
+# ============================================================
+# WINDOW MANAGER
+# ============================================================
+
+def find_all_game_windows():
     windows = []
 
-    def callback(hwnd, extra):
+    def enum_callback(hwnd, _):
 
         if not win32gui.IsWindowVisible(hwnd):
             return
@@ -74,264 +103,75 @@ def find_game_window():
             windows.append(hwnd)
 
     win32gui.EnumWindows(
-        callback,
+        enum_callback,
         None
     )
 
-    if not windows:
+    return windows
 
-        raise RuntimeError(
-            f'Cannot find game window: "{GAME_TITLE}"'
-        )
 
-    hwnd = windows[0]
+# ============================================================
+# BACKGROUND CLICK
+# ============================================================
 
-    print(
-        f"[WINDOW] HWND={hwnd}"
+def post_mouse_click(
+    bot_index,
+    hwnd,
+    x,
+    y,
+    description=""
+):
+    """
+    Background click.
+
+    IMPORTANT:
+    - No physical mouse movement.
+    - No SetForegroundWindow.
+    - No BringWindowToTop.
+    """
+
+    x = int(x)
+    y = int(y)
+
+    lparam = win32api.MAKELONG(
+        x,
+        y
     )
-
-    return hwnd
-
-
-# ============================================================
-# YAML
-# ============================================================
-
-def load_yaml(path):
-
-    path = Path(path)
-
-    if not path.exists():
-
-        raise FileNotFoundError(
-            f"Config not found: {path}"
-        )
-
-    with open(
-        path,
-        "r",
-        encoding="utf-8"
-    ) as f:
-
-        config = yaml.safe_load(f)
-
-    if not config:
-        return {}
-
-    return config
-
-
-def load_button_config():
-
-    config = load_yaml(
-        BUTTON_CONFIG_PATH
-    )
-
-    if "buttons" not in config:
-
-        raise ValueError(
-            f"Missing 'buttons' section "
-            f"in {BUTTON_CONFIG_PATH}"
-        )
-
-    return config["buttons"]
-
-
-def load_refresh_config():
-
-    config = load_yaml(
-        REFRESH_CONFIG_PATH
-    )
-
-    if "refresh" not in config:
-
-        raise ValueError(
-            f"Missing 'refresh' section "
-            f"in {REFRESH_CONFIG_PATH}"
-        )
-
-    return config["refresh"]
-
-
-# ============================================================
-# CONFIG VALIDATION
-# ============================================================
-
-def validate_button_config(buttons):
-
-    required_buttons = [
-        "NVHN",
-        "Select",
-        "Explorer",
-        "Training",
-        "Arena",
-        "Sail",
-        "Cook",
-        "Forge",
-        "Gold",
-        "Enhance",
-        "Fight",
-    ]
 
     print()
     print(
-        "[CONFIG] Checking buttons.yaml"
-    )
-
-    for button_name in required_buttons:
-
-        if button_name not in buttons:
-
-            raise ValueError(
-                f"Missing button "
-                f"'{button_name}' "
-                f"in {BUTTON_CONFIG_PATH}"
-            )
-
-        config = buttons[button_name]
-
-        for key in [
-            "x1",
-            "y1",
-            "x2",
-            "y2",
-        ]:
-
-            if key not in config:
-
-                raise ValueError(
-                    f"Button '{button_name}' "
-                    f"missing '{key}'"
-                )
-
-        print(
-            f"  [OK] {button_name}"
-        )
-
-
-def validate_refresh_config(refresh):
-
-    print()
-    print(
-        "[CONFIG] Checking refresh.yaml"
-    )
-
-    for key in [
-        "x1",
-        "y1",
-        "x2",
-        "y2",
-    ]:
-
-        if key not in refresh:
-
-            raise ValueError(
-                f"Refresh config missing "
-                f"'{key}'"
-            )
-
-    if not REFRESH_TEMPLATE.exists():
-
-        raise FileNotFoundError(
-            f"Refresh template not found: "
-            f"{REFRESH_TEMPLATE}"
-        )
-
-    print(
-        f"  [OK] template: "
-        f"{REFRESH_TEMPLATE}"
+        f"[BOT {bot_index}] [CLICK] "
+        f"{description}"
     )
 
     print(
-        f"  [OK] ROI: "
-        f"({refresh['x1']}, {refresh['y1']}) -> "
-        f"({refresh['x2']}, {refresh['y2']})"
+        f"[BOT {bot_index}] [CLICK] "
+        f"HWND   = {hwnd}"
     )
-
-
-# ============================================================
-# ACTIVATE GAME WINDOW
-# ============================================================
-
-def activate_game_window(hwnd):
 
     print(
-        f"[WINDOW] Activating HWND={hwnd}"
+        f"[BOT {bot_index}] [CLICK] "
+        f"client = ({x},{y})"
     )
-
-    try:
-
-        win32gui.ShowWindow(
-            hwnd,
-            win32con.SW_RESTORE
-        )
-
-        win32gui.BringWindowToTop(
-            hwnd
-        )
-
-        win32gui.SetForegroundWindow(
-            hwnd
-        )
-
-        time.sleep(
-            0.2
-        )
-
-    except Exception as e:
-
-        print(
-            f"[WINDOW] Activation warning: "
-            f"{e}"
-        )
 
     foreground = (
         win32gui.GetForegroundWindow()
     )
 
     print(
-        f"[WINDOW] Foreground HWND="
-        f"{foreground}"
+        f"[BOT {bot_index}] [CLICK] "
+        f"foreground = {foreground}"
     )
 
-    return foreground == hwnd
-
-
-# ============================================================
-# CLIENT COORDINATE -> LPARAM
-# ============================================================
-
-def make_lparam(x, y):
-
-    return win32api.MAKELONG(
-        int(x),
-        int(y)
-    )
-
-
-# ============================================================
-# NON-INTRUSIVE WINDOW CLICK
-# ============================================================
-
-def post_mouse_click(hwnd, x, y):
-    x = int(x)
-    y = int(y)
-
-    lparam = win32api.MAKELONG(x, y)
-
-    print()
-    print("=" * 70)
-    print("[CLICK]")
-    print(f"[CLICK] HWND   = {hwnd}")
-    print(f"[CLICK] client = ({x},{y})")
-    print("[CLICK] Method = Windows PostMessage")
-    print("[CLICK] Physical mouse will NOT move.")
-    print("[CLICK] Game does NOT need foreground.")
-
-    if not win32gui.IsWindow(hwnd):
-        raise RuntimeError(
-            f"Invalid HWND: {hwnd}"
+    if foreground == hwnd:
+        print(
+            f"[BOT {bot_index}] "
+            "[WARNING] Game is foreground."
         )
+
+    # --------------------------------------------------------
+    # DOWN
+    # --------------------------------------------------------
 
     win32gui.PostMessage(
         hwnd,
@@ -340,11 +180,11 @@ def post_mouse_click(hwnd, x, y):
         lparam
     )
 
-    print(
-        "[CLICK] WM_LBUTTONDOWN posted."
-    )
-
     time.sleep(0.05)
+
+    # --------------------------------------------------------
+    # UP
+    # --------------------------------------------------------
 
     win32gui.PostMessage(
         hwnd,
@@ -354,366 +194,127 @@ def post_mouse_click(hwnd, x, y):
     )
 
     print(
-        "[CLICK] WM_LBUTTONUP posted."
+        f"[BOT {bot_index}] [CLICK] "
+        f"message sent."
     )
 
-    print("[CLICK] Click message sent.")
     print(
-        f"[CLICK] Waiting {CLICK_WAIT:.1f}s..."
+        f"[BOT {bot_index}] [CLICK] "
+        f"waiting {CLICK_WAIT:.1f}s..."
     )
 
     time.sleep(CLICK_WAIT)
 
-    print("=" * 70)
-
-    return True
-
-
 
 # ============================================================
-# CLICK DETECTION
+# CAPTURE
 # ============================================================
 
-def click_detection(
+def capture_game(
+    bot_index,
     hwnd,
-    detection
+    label=""
 ):
+    capture = WindowCapture(hwnd)
+
+    frame = capture.grab()
+
+    print(
+        f"[BOT {bot_index}] "
+        f"[CAPTURE] {label} "
+        f"{frame.shape[1]}x{frame.shape[0]}"
+    )
+
+    DEBUG_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    filename = (
+        f"bot_{bot_index}_{label}.png"
+    )
+
+    path = DEBUG_DIR / filename
+
+    cv2.imwrite(
+        str(path),
+        frame
+    )
+
+    return frame
+
+
+# ============================================================
+# NVHN
+# ============================================================
+
+def detect_nvhn(
+    bot_index,
+    frame
+):
+    matcher = TemplateMatcher(
+        threshold=THRESHOLD
+    )
+
+    detection = matcher.find(
+        frame,
+        NVHN_TEMPLATE
+    )
 
     if detection is None:
 
         print(
-            "[CLICK] Detection is None."
+            f"[BOT {bot_index}] "
+            "[NVHN] NOT FOUND"
         )
 
-        return False
-
-    x, y = detection["center"]
+        return None
 
     print(
-        f"[CLICK] Detection center="
-        f"({x},{y})"
+        f"[BOT {bot_index}] "
+        f"[NVHN] confidence="
+        f"{detection['confidence']:.4f} "
+        f"center={detection['center']}"
     )
 
-    return post_mouse_click(
-        hwnd,
-        x,
-        y
-    )
+    return detection
 
 
 # ============================================================
-# CLICK BUTTON FROM YAML
+# REFRESH
 # ============================================================
 
-def click_button(
-    hwnd,
-    buttons,
-    button_name
+def detect_refresh(
+    bot_index,
+    frame
 ):
-
-    if button_name not in buttons:
-
-        print(
-            f"[BUTTON] '{button_name}' "
-            f"not found in buttons.yaml"
-        )
-
-        return False
-
-    config = buttons[
-        button_name
-    ]
+    config = REFRESH_CONFIG["refresh"]
 
     x1 = config["x1"]
     y1 = config["y1"]
     x2 = config["x2"]
     y2 = config["y2"]
 
-    center_x = (
-        x1 + x2
-    ) // 2
-
-    center_y = (
-        y1 + y2
-    ) // 2
-
-    print()
-    print(
-        f"[BUTTON] {button_name}"
-    )
-
-    print(
-        f"         ROI="
-        f"({x1},{y1}) -> "
-        f"({x2},{y2})"
-    )
-
-    print(
-        f"         center="
-        f"({center_x},{center_y})"
-    )
-
-    return post_mouse_click(
-        hwnd,
-        center_x,
-        center_y
-    )
-
-
-# ============================================================
-# NVHN TEMPLATE
-# ============================================================
-
-def get_nvhn_template():
-
-    templates = sorted(
-        NVHN_TEMPLATE_DIR.glob("*.png")
-    )
-
-    if not templates:
-
-        raise FileNotFoundError(
-            f"No NVHN template found in "
-            f"{NVHN_TEMPLATE_DIR}"
-        )
-
-    template = templates[0]
-
-    print(
-        f"[NVHN] Template: "
-        f"{template}"
-    )
-
-    return template
-
-
-# ============================================================
-# NVHN DEBUG
-# ============================================================
-
-def save_nvhn_candidate_debug(
-    frame,
-    candidate,
-    template_path
-):
-
-    DEBUG_CAPTURE_DIR.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    x = candidate["x"]
-    y = candidate["y"]
-    w = candidate["width"]
-    h = candidate["height"]
-
-    # --------------------------------------------------------
-    # Candidate crop
-    # --------------------------------------------------------
-
-    candidate_crop = frame[
-        y:y + h,
-        x:x + w
-    ]
-
-    candidate_file = (
-        DEBUG_CAPTURE_DIR /
-        "nvhn_candidate.png"
-    )
-
-    cv2.imwrite(
-        str(candidate_file),
-        candidate_crop
-    )
-
-    # --------------------------------------------------------
-    # Template
-    # --------------------------------------------------------
-
-    template = cv2.imread(
-        str(template_path),
-        cv2.IMREAD_COLOR
-    )
-
-    template_file = (
-        DEBUG_CAPTURE_DIR /
-        "nvhn_template.png"
-    )
-
-    cv2.imwrite(
-        str(template_file),
-        template
-    )
-
-    # --------------------------------------------------------
-    # Full debug frame
-    # --------------------------------------------------------
-
-    debug = frame.copy()
-
-    cv2.rectangle(
-        debug,
-        (x, y),
-        (x + w, y + h),
-        (0, 255, 0),
-        2
-    )
-
-    cx, cy = candidate["center"]
-
-    cv2.circle(
-        debug,
-        (cx, cy),
-        5,
-        (0, 0, 255),
-        -1
-    )
-
-    cv2.putText(
-        debug,
-        f"NVHN {candidate['confidence']:.4f}",
-        (x, max(20, y - 5)),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        (0, 255, 0),
-        2
-    )
-
-    full_file = (
-        DEBUG_CAPTURE_DIR /
-        "nvhn_match_debug.png"
-    )
-
-    cv2.imwrite(
-        str(full_file),
-        debug
-    )
-
-    print(
-        f"[NVHN DEBUG] Candidate image: "
-        f"{candidate_file}"
-    )
-
-    print(
-        f"[NVHN DEBUG] Template image: "
-        f"{template_file}"
-    )
-
-    print(
-        f"[NVHN DEBUG] Full image: "
-        f"{full_file}"
-    )
-
-    print(
-        f"[NVHN DEBUG] Candidate bbox: "
-        f"x={x}, y={y}, "
-        f"w={w}, h={h}"
-    )
-
-
-# ============================================================
-# DETECT NVHN
-# ============================================================
-
-def detect_nvhn(
-    frame,
-    detector
-):
-
-    template_path = get_nvhn_template()
-
-    print(
-        f"[NVHN] Template: "
-        f"{template_path}"
-    )
-
-    print(
-        "[NVHN] Searching entire game window"
-    )
-
-    candidates = detector.matcher.find_all(
-        frame,
-        template_path,
-        threshold=0.90
-    )
-
-    print(
-        f"[NVHN] Found "
-        f"{len(candidates)} candidate(s)"
-    )
-
-    for index, candidate in enumerate(
-        candidates,
-        start=1
-    ):
-
-        print(
-            f"[NVHN] Candidate {index}: "
-            f"confidence="
-            f"{candidate['confidence']:.4f}, "
-            f"center="
-            f"{candidate['center']}"
-        )
-
-    if not candidates:
-
-        print(
-            "[NVHN] No candidate found"
-        )
-
-        return None
-
-    # Candidates are already sorted by confidence
-    nvhn = candidates[0]
-
-    nvhn["type"] = "NVHN"
-    nvhn["template"] = (
-        template_path.stem
-    )
-
-    save_nvhn_candidate_debug(
-        frame,
-        nvhn,
-        template_path
-    )
-
-    print(
-        f"[NVHN] Selected candidate: "
-        f"confidence="
-        f"{nvhn['confidence']:.4f}, "
-        f"center="
-        f"{nvhn['center']}"
-    )
-
-    return nvhn
-
-
-# ============================================================
-# DETECT REFRESH
-# ============================================================
-
-def detect_refresh(
-    frame,
-    detector,
-    refresh_config
-):
-
-    x1 = refresh_config["x1"]
-    y1 = refresh_config["y1"]
-    x2 = refresh_config["x2"]
-    y2 = refresh_config["y2"]
-
     crop = frame[
         y1:y2,
         x1:x2
     ]
 
-    detection = detector.matcher.find(
+    matcher = TemplateMatcher(
+        threshold=THRESHOLD
+    )
+
+    detection = matcher.find(
         crop,
         REFRESH_TEMPLATE
     )
 
     if detection is None:
+
+        print(
+            f"[BOT {bot_index}] "
+            "[REFRESH] NOT FOUND"
+        )
 
         return None
 
@@ -727,119 +328,14 @@ def detect_refresh(
         cy + y1
     )
 
-    detection["type"] = "Refresh"
+    print(
+        f"[BOT {bot_index}] "
+        f"[REFRESH] confidence="
+        f"{detection['confidence']:.4f} "
+        f"center={detection['center']}"
+    )
 
     return detection
-
-
-# ============================================================
-# CLICK REFRESH
-# ============================================================
-
-def click_refresh(
-    hwnd,
-    frame,
-    detector,
-    refresh_config
-):
-
-    print()
-    print(
-        "[REFRESH] Detecting refresh..."
-    )
-
-    detection = detect_refresh(
-        frame,
-        detector,
-        refresh_config
-    )
-
-    if detection is None:
-
-        print(
-            "[REFRESH] Button not detected."
-        )
-
-        return False
-
-    print(
-        f"[REFRESH] Found "
-        f"confidence="
-        f"{detection['confidence']:.3f} "
-        f"center="
-        f"{detection['center']}"
-    )
-
-    return click_detection(
-        hwnd,
-        detection
-    )
-
-
-# ============================================================
-# MATCH QUEST -> MISSION
-# ============================================================
-
-def match_quest_to_mission(
-    quest,
-    missions
-):
-
-    quest_type = quest["type"]
-
-    print(
-        f"[MATCH] Quest type: "
-        f"{quest_type}"
-    )
-
-    candidates = [
-        mission
-        for mission in missions
-        if mission["type"] == quest_type
-    ]
-
-    if not candidates:
-
-        print(
-            f"[MATCH] No mission for "
-            f"{quest_type}"
-        )
-
-        return None
-
-    candidates.sort(
-        key=lambda item:
-        item["confidence"],
-        reverse=True
-    )
-
-    mission = candidates[0]
-
-    print(
-        "[MATCH] Found mission:"
-    )
-
-    print(
-        f"        type="
-        f"{mission['type']}"
-    )
-
-    print(
-        f"        slot="
-        f"{mission['slot']}"
-    )
-
-    print(
-        f"        confidence="
-        f"{mission['confidence']:.3f}"
-    )
-
-    print(
-        f"        center="
-        f"{mission['center']}"
-    )
-
-    return mission
 
 
 # ============================================================
@@ -847,79 +343,46 @@ def match_quest_to_mission(
 # ============================================================
 
 def print_detections(
+    bot_index,
     detection
 ):
 
-    print()
-    print(
-        "---------------- DETECTION ----------------"
-    )
-
-    # --------------------------------------------------------
-    # NVHN
-    # --------------------------------------------------------
-
-    nvhn = detection.get(
-        "nvhn"
-    )
-
-    if nvhn:
-
-        print(
-            "[NVHN]"
-            f" confidence="
-            f"{nvhn['confidence']:.3f}"
-            f" center="
-            f"{nvhn['center']}"
-        )
-
-    else:
-
-        print(
-            "[NVHN] NOT FOUND"
-        )
-
-    # --------------------------------------------------------
-    # Active quests
-    # --------------------------------------------------------
-
-    print()
-
-    quests = detection.get(
+    active_quests = detection.get(
         "active_quests",
         []
     )
-
-    print(
-        f"[ACTIVE QUESTS] "
-        f"{len(quests)}"
-    )
-
-    for quest in quests:
-
-        print(
-            f"  {quest['slot']}: "
-            f"{quest['type']} "
-            f"confidence="
-            f"{quest['confidence']:.3f} "
-            f"center="
-            f"{quest['center']}"
-        )
-
-    # --------------------------------------------------------
-    # Missions
-    # --------------------------------------------------------
-
-    print()
 
     missions = detection.get(
         "missions",
         []
     )
 
+    print()
     print(
-        f"[MISSIONS] "
-        f"{len(missions)}"
+        f"[BOT {bot_index}] "
+        "--------------------------------------------"
+    )
+
+    print(
+        f"[BOT {bot_index}] "
+        f"[ACTIVE QUESTS] {len(active_quests)}"
+    )
+
+    for quest in active_quests:
+
+        print(
+            f"  {quest['slot']}: "
+            f"{quest['type']} "
+            f"confidence="
+            f"{quest['confidence']:.3f} "
+            f"center={quest['center']}"
+        )
+
+    print()
+
+    print(
+        f"[BOT {bot_index}] "
+        f"[MISSIONS] {len(missions)}"
     )
 
     for mission in missions:
@@ -929,189 +392,54 @@ def print_detections(
             f"{mission['type']} "
             f"confidence="
             f"{mission['confidence']:.3f} "
-            f"center="
-            f"{mission['center']}"
+            f"center={mission['center']}"
         )
 
     print(
+        f"[BOT {bot_index}] "
         "--------------------------------------------"
     )
 
-    print()
-
 
 # ============================================================
-# CAPTURE
+# MATCH
 # ============================================================
 
-def capture_game(
-    capture,
-    label
+def match_quest_to_mission(
+    quest,
+    missions
 ):
+    quest_type = quest["type"]
 
-    DEBUG_CAPTURE_DIR.mkdir(
-        parents=True,
-        exist_ok=True
-    )
+    for mission in missions:
 
-    print(
-        "[CAPTURE] Capturing game..."
-    )
+        if mission["type"] == quest_type:
 
-    frame = capture.grab()
+            return mission
 
-    print(
-        f"[CAPTURE] "
-        f"{frame.shape[1]}x"
-        f"{frame.shape[0]}"
-    )
+    return None
 
-    output_path = (
-        DEBUG_CAPTURE_DIR /
-        f"{label}.png"
-    )
-
-    if not cv2.imwrite(
-        str(output_path),
-        frame
-    ):
-
-        raise RuntimeError(
-            f"Unable to save capture: "
-            f"{output_path}"
-        )
-
-    print(
-        f"[CAPTURE] Saved: "
-        f"{output_path}"
-    )
-
-    return frame
-
-
-# ============================================================
-# SELECT MISSION
-# ============================================================
-
-def select_mission(
-    hwnd,
-    buttons,
-    mission
-):
-
-    print()
-    print(
-        "[STEP] Selecting mission"
-    )
-
-    print(
-        f"[MISSION] "
-        f"{mission['type']} "
-        f"{mission['slot']}"
-    )
-
-    # --------------------------------------------------------
-    # Click mission slot
-    # --------------------------------------------------------
-
-    if not click_detection(
-        hwnd,
-        mission
-    ):
-
-        raise RuntimeError(
-            "Unable to click mission."
-        )
-
-    # --------------------------------------------------------
-    # Click Select
-    # --------------------------------------------------------
-
-    if not click_button(
-        hwnd,
-        buttons,
-        "Select"
-    ):
-
-        raise RuntimeError(
-            "Button 'Select' is missing "
-            "from buttons.yaml"
-        )
-
-    print(
-        f"[SELECT] Waiting "
-        f"{WAIT_AFTER_SELECT:.1f}s..."
-    )
-
-    time.sleep(
-        WAIT_AFTER_SELECT
-    )
-
-    return True
-
-
-# ============================================================
-# GO TO DESTINATION
-# ============================================================
-
-def go_to_destination(
-    hwnd,
-    buttons,
-    mission_type
-):
-
-    print()
-    print(
-        "[STEP] Going to destination:"
-    )
-
-    print(
-        f"       {mission_type}"
-    )
-
-    if mission_type not in buttons:
-
-        raise RuntimeError(
-            f"No destination button "
-            f"'{mission_type}' "
-            f"in buttons.yaml"
-        )
-
-    if not click_button(
-        hwnd,
-        buttons,
-        mission_type
-    ):
-
-        raise RuntimeError(
-            f"Unable to click destination "
-            f"'{mission_type}'"
-        )
-
-    print(
-        f"[DESTINATION] Waiting "
-        f"{WAIT_AFTER_DESTINATION:.1f}s..."
-    )
-
-    time.sleep(
-        WAIT_AFTER_DESTINATION
-    )
-
-    print(
-        f"[DESTINATION] "
-        f"{mission_type}"
-    )
-
-    return True
-
-
-# ============================================================
-# FIND QUEST + MATCH
-# ============================================================
 
 def find_matching_mission(
+    bot_index,
     detection
 ):
+    """
+    Try ALL active quests.
+
+    Example:
+
+        quest_1 = Arena
+        quest_2 = Sail
+
+        missions:
+            Enhance
+            Forge
+            Sail
+
+    Result:
+        quest_2 + Sail
+    """
 
     quests = detection.get(
         "active_quests",
@@ -1126,20 +454,25 @@ def find_matching_mission(
     if not quests:
 
         print(
+            f"[BOT {bot_index}] "
             "[MATCH] No active quest detected."
         )
 
         return None, None
 
     # --------------------------------------------------------
-    # Try all active quests.
-    # If quest_1 has no matching mission,
-    # continue with quest_2, quest_3, ...
+    # IMPORTANT:
+    # Do NOT use quests[0] only.
     # --------------------------------------------------------
 
     for quest in quests:
+
+        quest_type = quest["type"]
+
         print(
-            f"[MATCH] Quest type: {quest['type']}"
+            f"[BOT {bot_index}] "
+            f"[MATCH] Quest type: "
+            f"{quest_type}"
         )
 
         mission = match_quest_to_mission(
@@ -1147,337 +480,637 @@ def find_matching_mission(
             missions
         )
 
-        if mission is not None:
+        if mission is None:
+
             print(
-                f"[MATCH] Found mission "
-                f"for {quest['type']}"
+                f"[BOT {bot_index}] "
+                f"[MATCH] No mission for "
+                f"{quest_type}"
             )
 
-            return quest, mission
+            continue
+
+        print(
+            f"[BOT {bot_index}] "
+            f"[MATCH] FOUND "
+            f"{quest_type} -> "
+            f"{mission['slot']}"
+        )
+
+        return quest, mission
 
     print(
-        "[MATCH] No mission for any active quest."
+        f"[BOT {bot_index}] "
+        "[MATCH] No mission for "
+        "any active quest."
     )
 
     return None, None
 
 
 # ============================================================
-# MAIN FLOW
+# BUTTON
 # ============================================================
 
-def main():
+def click_button(
+    bot_index,
+    hwnd,
+    button_name
+):
+    buttons = BUTTON_CONFIG["buttons"]
 
-    print("=" * 70)
-    print(
-        "BotVHT - TEST MISSION FLOW"
-    )
-    print("=" * 70)
+    if button_name not in buttons:
 
-    print()
-    print(
-        "[INPUT] Using non-intrusive "
-        "Windows PostMessage clicks."
-    )
-
-    print(
-        "[INPUT] Physical mouse will NOT move."
-    )
-
-    # ========================================================
-    # 1. WINDOW
-    # ========================================================
-
-    hwnd = find_game_window()
-
-    # ========================================================
-    # 2. CAPTURE
-    # ========================================================
-
-    capture = WindowCapture(
-        hwnd
-    )
-
-    # ========================================================
-    # 3. DETECTOR
-    # ========================================================
-
-    detector = GameDetector(
-        threshold=0.80
-    )
-
-    # ========================================================
-    # 4. CONFIG
-    # ========================================================
-
-    buttons = load_button_config()
-
-    refresh_config = load_refresh_config()
-
-    validate_button_config(
-        buttons
-    )
-
-    validate_refresh_config(
-        refresh_config
-    )
-
-    print()
-    print(
-        "[CONFIG] Buttons loaded:"
-    )
-
-    for name in buttons:
-
-        print(
-            f"  - {name}"
+        raise KeyError(
+            f"Button '{button_name}' "
+            f"not found in "
+            f"{BUTTON_CONFIG_PATH}"
         )
 
-    # ========================================================
-    # 5. INITIAL CAPTURE
-    # ========================================================
+    button = buttons[button_name]
 
-    frame = capture_game(
-        capture,
-        "01_initial"
+    x = button.get("center", {}).get(
+        "x"
     )
 
-    # ========================================================
-    # 6. DETECT NVHN
-    # ========================================================
+    y = button.get("center", {}).get(
+        "y"
+    )
+
+    # --------------------------------------------------------
+    # Current buttons.yaml stores x1/y1/x2/y2.
+    # Calculate center when center isn't stored.
+    # --------------------------------------------------------
+
+    if x is None or y is None:
+
+        x = (
+            button["x1"] +
+            button["x2"]
+        ) // 2
+
+        y = (
+            button["y1"] +
+            button["y2"]
+        ) // 2
+
+    post_mouse_click(
+        bot_index,
+        hwnd,
+        x,
+        y,
+        description=button_name
+    )
+
+
+# ============================================================
+# MISSION CLICK
+# ============================================================
+
+def click_mission(
+    bot_index,
+    hwnd,
+    mission
+):
+    x, y = mission["center"]
+
+    post_mouse_click(
+        bot_index,
+        hwnd,
+        x,
+        y,
+        description=(
+            f"Mission "
+            f"{mission['slot']} "
+            f"({mission['type']})"
+        )
+    )
+
+
+# ============================================================
+# SELECT
+# ============================================================
+
+def select_mission(
+    bot_index,
+    hwnd
+):
+    print()
+    print(
+        f"[BOT {bot_index}] "
+        "[SELECT] Clicking Select"
+    )
+
+    click_button(
+        bot_index,
+        hwnd,
+        "Select"
+    )
+
+
+# ============================================================
+# DESTINATION
+# ============================================================
+
+def go_to_destination(
+    bot_index,
+    hwnd,
+    mission_type
+):
+    """
+    Destination button is stored in buttons.yaml
+    under the mission type.
+
+    Example:
+
+        Sail    -> buttons.Sail
+        Arena   -> buttons.Arena
+        Forge   -> buttons.Forge
+    """
 
     print()
     print(
-        "[STEP] Detecting NVHN"
+        f"[BOT {bot_index}] "
+        f"[DESTINATION] "
+        f"{mission_type}"
     )
 
+    buttons = BUTTON_CONFIG["buttons"]
+
+    if mission_type not in buttons:
+
+        raise KeyError(
+            f"No destination button "
+            f"for mission type: "
+            f"{mission_type}"
+        )
+
+    click_button(
+        bot_index,
+        hwnd,
+        mission_type
+    )
+
+
+# ============================================================
+# REFRESH
+# ============================================================
+
+def refresh_missions(
+    bot_index,
+    hwnd,
+    frame,
+    refresh_count
+):
+    if refresh_count >= MAX_REFRESH:
+
+        print(
+            f"[BOT {bot_index}] "
+            f"[REFRESH] Maximum refresh "
+            f"reached: {MAX_REFRESH}"
+        )
+
+        return (
+            frame,
+            refresh_count,
+            False
+        )
+
+    detection = detect_refresh(
+        bot_index,
+        frame
+    )
+
+    if detection is None:
+
+        print(
+            f"[BOT {bot_index}] "
+            "[REFRESH] Cannot find refresh."
+        )
+
+        return (
+            frame,
+            refresh_count,
+            False
+        )
+
+    refresh_count += 1
+
+    print()
+    print(
+        f"[BOT {bot_index}] "
+        f"[REFRESH] "
+        f"{refresh_count}/{MAX_REFRESH}"
+    )
+
+    x, y = detection["center"]
+
+    post_mouse_click(
+        bot_index,
+        hwnd,
+        x,
+        y,
+        description="Refresh"
+    )
+
+    print(
+        f"[BOT {bot_index}] "
+        "[REFRESH] Capturing new missions..."
+    )
+
+    new_frame = capture_game(
+        bot_index,
+        hwnd,
+        f"after_refresh_{refresh_count}"
+    )
+
+    return (
+        new_frame,
+        refresh_count,
+        True
+    )
+
+
+# ============================================================
+# ONE BOT
+# ============================================================
+
+def run_bot(
+    bot_index,
+    hwnd,
+    detector
+):
+    """
+    Complete mission flow for ONE game window.
+    """
+
+    print()
+    print("=" * 70)
+    print(
+        f"[BOT {bot_index}] START"
+    )
+    print(
+        f"[BOT {bot_index}] HWND = {hwnd}"
+    )
+    print("=" * 70)
+
+    refresh_count = 0
+
+    # --------------------------------------------------------
+    # STEP 1
+    # Capture
+    # --------------------------------------------------------
+
+    frame = capture_game(
+        bot_index,
+        hwnd,
+        "initial"
+    )
+
+    # --------------------------------------------------------
+    # STEP 2
+    # NVHN
+    # --------------------------------------------------------
+
     nvhn = detect_nvhn(
-        frame,
-        detector
+        bot_index,
+        frame
     )
 
     if nvhn is None:
 
         print(
-            "[NVHN] Not found."
+            f"[BOT {bot_index}] "
+            "[STOP] NVHN not found."
         )
 
-        return
+        return False
 
-    print(
-        f"[NVHN] Found "
-        f"confidence="
-        f"{nvhn['confidence']:.3f} "
-        f"center="
-        f"{nvhn['center']}"
-    )
+    # --------------------------------------------------------
+    # STEP 3
+    # Open NVHN
+    # --------------------------------------------------------
 
-    # ========================================================
-    # 7. CLICK NVHN
-    # ========================================================
+    x, y = nvhn["center"]
 
-    print()
-    print(
-        "[STEP] Opening NVHN"
-    )
-
-    if not click_detection(
+    post_mouse_click(
+        bot_index,
         hwnd,
-        nvhn
-    ):
-
-        raise RuntimeError(
-            "Failed to send NVHN click."
-        )
+        x,
+        y,
+        description="NVHN"
+    )
 
     print(
-        f"[NVHN] Waiting "
-        f"{WAIT_AFTER_NVHN:.1f}s..."
+        f"[BOT {bot_index}] "
+        f"[WAIT] Waiting "
+        f"{WAIT_AFTER_NVHN:.1f}s "
+        "after NVHN..."
     )
 
     time.sleep(
         WAIT_AFTER_NVHN
     )
 
-    # ========================================================
-    # 8. CAPTURE AFTER NVHN
-    # ========================================================
-
-    frame = capture_game(
-        capture,
-        "02_after_nvhn_click"
-    )
-
-    # ========================================================
-    # 9. MISSION SEARCH LOOP
-    # ========================================================
-
-    refresh_count = 0
+    # --------------------------------------------------------
+    # STEP 4
+    # Mission matching / refresh
+    # --------------------------------------------------------
 
     while True:
 
         print()
-        print("=" * 70)
-
         print(
-            f"[LOOP] Mission search "
-            f"(refresh={refresh_count}/"
-            f"{MAX_REFRESH})"
+            f"[BOT {bot_index}] "
+            "[DETECT] Active quests "
+            "and missions"
         )
 
-        print("=" * 70)
-
-        # ----------------------------------------------------
-        # Fresh capture
-        # ----------------------------------------------------
-
-        frame = capture_game(
-            capture,
-            f"mission_{refresh_count:02d}"
-        )
-
-        # ----------------------------------------------------
-        # Detect
-        # ----------------------------------------------------
-
-        detection = detector.detect(
-            frame
-        )
+        detection = {
+            "active_quests":
+                detector.detect_active_quests(
+                    frame
+                ),
+            "missions":
+                detector.detect_missions(
+                    frame
+                )
+        }
 
         print_detections(
+            bot_index,
             detection
         )
 
         # ----------------------------------------------------
-        # Match
+        # Try ALL active quests
         # ----------------------------------------------------
 
         quest, mission = (
             find_matching_mission(
+                bot_index,
                 detection
             )
         )
-
-        if quest is None:
-
-            print(
-                "[STOP] No active quest."
-            )
-
-            return
 
         # ----------------------------------------------------
         # MATCH FOUND
         # ----------------------------------------------------
 
-        if mission is not None:
+        if (
+            quest is not None
+            and mission is not None
+        ):
 
             print()
             print(
-                "[SUCCESS] Matching mission found."
-            )
-
-            # ------------------------------------------------
-            # Select mission
-            # ------------------------------------------------
-
-            select_mission(
-                hwnd,
-                buttons,
-                mission
-            )
-
-            # ------------------------------------------------
-            # Destination
-            # ------------------------------------------------
-
-            go_to_destination(
-                hwnd,
-                buttons,
-                mission["type"]
-            )
-
-            print()
-            print("=" * 70)
-
-            print(
-                "[DONE] Mission flow completed."
+                f"[BOT {bot_index}] "
+                "[MATCH] Selected:"
             )
 
             print(
-                f"Quest       : "
+                f"  Quest   : "
+                f"{quest['slot']} -> "
                 f"{quest['type']}"
             )
 
             print(
-                f"Mission     : "
+                f"  Mission : "
+                f"{mission['slot']} -> "
                 f"{mission['type']}"
             )
 
-            print(
-                f"Mission slot: "
-                f"{mission['slot']}"
+            # ------------------------------------------------
+            # Click mission
+            # ------------------------------------------------
+
+            click_mission(
+                bot_index,
+                hwnd,
+                mission
             )
 
-            print("=" * 70)
+            # ------------------------------------------------
+            # Click Select
+            # ------------------------------------------------
 
-            return
+            select_mission(
+                bot_index,
+                hwnd
+            )
 
-        # ====================================================
-        # NO MATCH -> REFRESH
-        # ====================================================
+            # ------------------------------------------------
+            # Go destination
+            # ------------------------------------------------
 
-        if refresh_count >= MAX_REFRESH:
+            go_to_destination(
+                bot_index,
+                hwnd,
+                mission["type"]
+            )
 
             print()
             print(
+                f"[BOT {bot_index}] "
+                "[SUCCESS] Mission selected "
+                "and destination clicked."
+            )
+
+            return True
+
+        # ----------------------------------------------------
+        # No match
+        # ----------------------------------------------------
+
+        print()
+        print(
+            f"[BOT {bot_index}] "
+            "[MATCH] No matching mission."
+        )
+
+        # ----------------------------------------------------
+        # Refresh limit
+        # ----------------------------------------------------
+
+        if refresh_count >= MAX_REFRESH:
+
+            print(
+                f"[BOT {bot_index}] "
                 f"[STOP] Reached maximum "
                 f"refresh count: "
                 f"{MAX_REFRESH}"
             )
 
-            return
+            return False
 
-        refresh_count += 1
+        # ----------------------------------------------------
+        # Refresh
+        # ----------------------------------------------------
 
-        print()
-        print(
-            "[NO MATCH] "
-            f"Refreshing missions "
-            f"({refresh_count}/"
-            f"{MAX_REFRESH})..."
+        frame, refresh_count, refreshed = (
+            refresh_missions(
+                bot_index,
+                hwnd,
+                frame,
+                refresh_count
+            )
         )
 
-        # ----------------------------------------------------
-        # Detect + click Refresh
-        # ----------------------------------------------------
+        if not refreshed:
 
-        if not click_refresh(
-            hwnd,
-            frame,
-            detector,
-            refresh_config
-        ):
-
-            raise RuntimeError(
-                "Refresh button could not be "
-                "detected using refresh.yaml "
-                "and refresh.png"
+            print(
+                f"[BOT {bot_index}] "
+                "[STOP] Refresh failed."
             )
 
+            return False
+
+        # ----------------------------------------------------
+        # Loop -> detect again
+        # ----------------------------------------------------
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    print()
+    print("=" * 70)
+    print("BOTVHT - MULTI WINDOW MISSION FLOW")
+    print("=" * 70)
+
+    print()
+    print(
+        "[CONFIG] "
+        f"MAX_REFRESH = {MAX_REFRESH}"
+    )
+
+    print(
+        "[CONFIG] "
+        f"CLICK_WAIT = {CLICK_WAIT}s"
+    )
+
+    print(
+        "[CONFIG] "
+        "Background input = PostMessage"
+    )
+
+    print(
+        "[CONFIG] "
+        "Physical mouse = NEVER MOVED"
+    )
+
+    # --------------------------------------------------------
+    # Find windows
+    # --------------------------------------------------------
+
+    windows = find_all_game_windows()
+
+    print()
+    print(
+        f"[MANAGER] Found "
+        f"{len(windows)} game window(s)"
+    )
+
+    if not windows:
+
         print(
-            f"[REFRESH] Waiting "
-            f"{WAIT_AFTER_REFRESH:.1f}s..."
+            "[STOP] No game windows found."
         )
 
-        time.sleep(
-            WAIT_AFTER_REFRESH
+        return
+
+    # --------------------------------------------------------
+    # Shared detector
+    # --------------------------------------------------------
+
+    detector = GameDetector(
+        threshold=THRESHOLD
+    )
+
+    # --------------------------------------------------------
+    # Process each game
+    # --------------------------------------------------------
+
+    results = []
+
+    for index, hwnd in enumerate(
+        windows,
+        start=1
+    ):
+
+        try:
+
+            success = run_bot(
+                index,
+                hwnd,
+                detector
+            )
+
+            results.append(
+                (
+                    index,
+                    hwnd,
+                    success
+                )
+            )
+
+        except Exception as e:
+
+            print()
+            print(
+                f"[BOT {index}] "
+                f"[ERROR] {e}"
+            )
+
+            results.append(
+                (
+                    index,
+                    hwnd,
+                    False
+                )
+            )
+
+    # --------------------------------------------------------
+    # Summary
+    # --------------------------------------------------------
+
+    print()
+    print("=" * 70)
+    print("MULTI WINDOW MISSION SUMMARY")
+    print("=" * 70)
+
+    for index, hwnd, success in results:
+
+        status = (
+            "SUCCESS"
+            if success
+            else "FAILED"
         )
 
+        print(
+            f"BOT {index}: "
+            f"HWND={hwnd} "
+            f"-> {status}"
+        )
 
-# ============================================================
-# ENTRY POINT
-# ============================================================
+    successful = sum(
+        1
+        for _, _, success in results
+        if success
+    )
+
+    print()
+    print(
+        f"[MANAGER] "
+        f"{successful}/{len(results)} "
+        "bots completed."
+    )
+
+    print("=" * 70)
+
 
 if __name__ == "__main__":
     main()
